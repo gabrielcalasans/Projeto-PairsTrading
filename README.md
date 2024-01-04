@@ -1,1 +1,3 @@
 # Projeto-PairsTrading
+
+Em desenvolvimento...
