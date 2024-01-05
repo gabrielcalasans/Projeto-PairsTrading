@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import numpy as np
 from plotly.subplots import make_subplots
+import streamlit as st
 
 class PairsHunter:
     def __init__(self, data, superior_filter):
@@ -57,7 +58,8 @@ class PairsHunter:
         pairs_trading_ideas = [list(t) for t in pairs_trading_ideas]
         
         return pairs_trading_ideas
-        
+
+@st.cache_resource        
 class PairsTrading:
     def __init__(self, df, k, window_size):
         self.k = k

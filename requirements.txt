@@ -8,3 +8,6 @@ streamlit-tags==1.2.8
 matplotlib==3.7.2
 seaborn==0.13.1
 openpyxl==3.1.2
+openai==1.6.1
+distro==1.9.0
+httpx==0.26.0
