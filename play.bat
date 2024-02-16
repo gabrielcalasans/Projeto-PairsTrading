@@ -1,0 +1,1 @@
+streamlit run PairsTrading.py

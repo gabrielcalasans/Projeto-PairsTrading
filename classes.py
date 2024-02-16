@@ -5,16 +5,18 @@ import plotly.graph_objects as go
 import numpy as np
 from plotly.subplots import make_subplots
 import streamlit as st
+from statsmodels.tsa.stattools import coint
 
 class PairsHunter:
-    def __init__(self, data, superior_filter):
-        self.data = data
-        self.corr_matrix = data.corr()
-        self.superior_filter = superior_filter
-        self.pairs_trading_ideas = []
-        self.pairs_trading_ideas = self.trading_ideas()
+    def __init__(self, data, p_value_threshold = 0.05):
+        self.data = data 
+        self.corr_matrix = self.data.corr()
+        
+        self.p_value_threshold = p_value_threshold
+        self.pairs_trading_ideas = self.find_cointegrated_pairs()  
     
     def plot_heatmap(self):
+        
         data = self.data
         corr_matrix = self.corr_matrix
 
@@ -33,32 +35,32 @@ class PairsHunter:
         return fig
 
     def plot_heatmap_sns(self):
-        corr_matrix = self.corr_matrix
-        
+        corr_matrix = self.corr_matrix        
         plt.figure(figsize = (15, 12))
         sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', linewidths = 0.75)
         plt.show()
-        
-    def trading_ideas(self):
-        superior_filter = self.superior_filter
-        corr_matrix = self.corr_matrix
+    
+    def find_cointegrated_pairs(self):
+        pairs_list = set()
+        for asset1 in self.data.columns:
+            for asset2 in self.data.columns:
+                if asset1 != asset2:
+                    p_value = self.test_cointegration(asset1, asset2)
+                    if p_value < self.p_value_threshold:
+                        pairs_list.add(tuple(sorted([asset1, asset2])))
 
-        mask = (corr_matrix > superior_filter)
-        relevant_corr = corr_matrix[mask]
+        pairs_list = list(pairs_list)
+        pairs_list = [list(pairs) for pairs in pairs_list]
+        return pairs_list
+                   
+    
+    def test_cointegration(self, asset1, asset2):
+        prices1 = self.data[asset1].values
+        prices2 = self.data[asset2].values
+        _, p_value, _ = coint(prices1, prices2)
+        return p_value
 
-        # Drops autocorrelation 
-        relevant_corr_t = relevant_corr
-        for col in relevant_corr_t.columns:
-            relevant_corr_t.loc[col, col] = None
-
-        # Get index and drops duplicated entry 
-        indices = relevant_corr_t.stack().index
-        sorted_indices = [tuple(sorted(pair)) for pair in indices]
-        pairs_trading_ideas = list(set(sorted_indices))
-        pairs_trading_ideas = [list(t) for t in pairs_trading_ideas]
-        
-        return pairs_trading_ideas
-
+    
 @st.cache_resource        
 class PairsTrading:
     def __init__(self, df, k, window_size):
@@ -68,6 +70,7 @@ class PairsTrading:
         self.signals_df = self.pairs_trading_strategy_signals()
         self.backtest_df = self.pairs_trading_backtest()
         self.measures = self.strategy_measures()
+        # print(self.signals_df.query('Signal == "Sell"'))
         
     def set_limits(self, df):
         ativo_1 = df.columns[0]
@@ -84,6 +87,7 @@ class PairsTrading:
         df['Lower_Limit'] = df['Spread_Mean'] - k * df['Spread_Std']
         
         return df
+
 
     def spread_chart(self):
         # Retrieve instance information
@@ -125,6 +129,7 @@ class PairsTrading:
         # Return the figure
         return fig
 
+    
     def pairs_trading_strategy_signals(self):        
         # Retrieve instance information
         df = self.df
@@ -169,9 +174,7 @@ class PairsTrading:
 
         signals_df = pd.DataFrame(signals, columns=['Signal', 'Date', 'Ativo', 'Price'])
 
-        return signals_df
-
-    
+        return signals_df 
     
     
     
@@ -213,10 +216,18 @@ class PairsTrading:
                     entry_price = spread
     #                 print(f"Sell Signal: {backtest_df.index[i]}, Entry Price: {entry_price}")
                 elif signal_type == 'Close' and position != 0:
-                    position = 0
-                    exit_price = spread
-                    trade_returns = exit_price - entry_price          
-                    entry_price = 0  # Reset entry price after closing a position
+                    if position == 1:
+                        exit_price = spread
+                        trade_returns = exit_price - entry_price
+                        entry_price = 0  # Reset entry price after closing a position
+                        # print(f"Close Signal for {ativo_1}: Exit Price: {exit_price}, Trade Returns: {trade_returns}, Cumulative Returns: {cumulative_returns[-1]}")
+                    elif position == -1:
+                        exit_price = spread
+                        trade_returns = entry_price - exit_price  # Reverse trade returns calculation for short position
+                        entry_price = 0  # Reset entry price after closing a position
+                        # print(f"Close Signal for {ativo_2}: Exit Price: {exit_price}, Trade Returns: {trade_returns}, Cumulative Returns: {cumulative_returns[-1]}")
+                    position = 0  # Reset position after closing a position
+
     #                 print(f"Close Signal: {backtest_df.index[i]}, Exit Price: {exit_price}, Trade Returns: {trade_returns}, Cumulative Returns: {cumulative_returns[-1]}")
 
                 cumulative_returns.append(cumulative_returns[-1] + trade_returns)
@@ -288,10 +299,19 @@ class PairsTrading:
         buy_trace = go.Scatter(x=buy_signals['Date'], y=buy_signals['Price'], mode='markers', marker=dict(symbol='triangle-up', size=8, color='green'), name='Buy Signal')
         sell_trace = go.Scatter(x=sell_signals['Date'], y=sell_signals['Price'], mode='markers', marker=dict(symbol='triangle-down', size=8, color='red'), name='Sell Signal')
 
-        # Create traces for Close signals
+       # Retrieve datetime index for Close signals
         close_signals = signals_df[signals_df['Signal'] == 'Close']
-        close_trace = go.Scatter(x=close_signals['Date'], y=close_signals['Price'],
-                                mode='markers', marker=dict(symbol='x', size=10, color='black'), name='Close Signal')
+        close_dates = close_signals['Date']
+
+        # Project Close signals onto the Spread line
+        close_indices = []
+        for date in close_dates:
+            idx = backtest_df.index.get_loc(date)
+            close_indices.append(idx)
+
+        close_trace = go.Scatter(x=backtest_df.index[close_indices], y=backtest_df.iloc[close_indices][backtest_df.columns[0]], mode='markers', marker=dict(symbol='hexagon2', size=10, color='black'), name='Close Signal')
+
+
 
         # Create subplot figure
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=('Pairs Trading Backtest - Prices and Spread', 'Pairs Trading Backtest - Cumulative Returns'))
